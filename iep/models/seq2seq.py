@@ -46,6 +46,7 @@ class Seq2Seq(nn.Module):
                                word2vec=word2vec, std=std)
 
     def get_dims(self, x=None, y=None):
+        # print(y)
         V_in = self.encoder_embed.num_embeddings
         V_out = self.decoder_embed.num_embeddings
         D = self.encoder_embed.embedding_dim
@@ -180,18 +181,25 @@ class Seq2Seq(nn.Module):
             # logprobs is N x 1 x V
             logprobs, h, c = self.decoder(encoded, cur_input, h0=h, c0=c)
             logprobs = logprobs / temperature
-            probs = F.softmax(logprobs.view(N, -1))  # Now N x V
+            probs = F.softmax(logprobs.view(N, -1), dim=1)  # Now N x V
             if argmax:
                 _, cur_output = probs.max(1)
+
             else:
-                cur_output = probs.multinomial()  # Now N x 1
-            self.multinomial_outputs.append(cur_output)
+                # cur_output = probs.multinomial()  # Now N x 1
+                # cur_output = probs.multinomial(1)  # Now N x 1
+                m = torch.distributions.Categorical(probs)
+                # m = torch.distributions.Multinomial(probs=probs)
+                cur_output = m.sample()
+                self.multinomial_outputs.append((m, cur_output))
+                # cur_output = cur_output
             self.multinomial_probs.append(probs)
             cur_output_data = cur_output.data.cpu()
+            # cur_output_data = cur_output.squeeze().data.cpu()
             not_done = logical_not(done)
             y[:, t][not_done] = cur_output_data[not_done]
             done = logical_or(done, cur_output_data.cpu() == self.END)
-            cur_input = cur_output
+            cur_input = cur_output.view(N, 1)
             if done.sum() == N:
                 break
         # return Variable(y.type_as(x.data))
@@ -217,10 +225,23 @@ class Seq2Seq(nn.Module):
                 mask = output_mask[:, t]
                 probs.register_hook(gen_hook(mask))
 
-        for sampled_output in self.multinomial_outputs:
-            sampled_output.reinforce(reward)
-            grad_output.append(None)
-        torch.autograd.backward(self.multinomial_outputs, grad_output, retain_variables=True)
+        # for sampled_output in self.multinomial_outputs:
+        #     sampled_output.reinforce(reward)
+        #     grad_output.append(None)
+        # torch.autograd.backward(self.multinomial_outputs, grad_output, retain_variables=True)
+
+        losses = []
+        for m, action in self.multinomial_outputs:
+            loss = -m.log_prob(action) * reward
+            # print(loss)
+            # loss.sum().backward(retain_graph=True)
+            # grad_output.append(None)
+            losses.append(loss)
+
+        # https://github.com/pytorch/examples/blob/master/reinforcement_learning/reinforce.py#L71
+        policy_loss = torch.cat(losses).sum()
+        policy_loss.backward()
+        # torch.autograd.backward(losses)
 
 
 def logical_and(x, y):
