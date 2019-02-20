@@ -7,7 +7,7 @@
 """
 Utilities for dealing with embeddings.
 """
-
+import torch
 
 def convert_pretrained_wordvecs(vocab, word2vec):
   N = len(vocab['question_idx_to_token'])
